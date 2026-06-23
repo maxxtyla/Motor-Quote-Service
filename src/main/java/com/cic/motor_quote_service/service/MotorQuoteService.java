@@ -1,7 +1,8 @@
 package com.cic.motor_quote_service.service;
 
-import com.cic.motor_quote_service.dto.QuoteRequest;
-import com.cic.motor_quote_service.dto.QuoteResponse;
+import com.cic.motor_quote_service.dto.request.CreateQuoteRequest;
+import com.cic.motor_quote_service.dto.response.QuoteResponse;
+
 import com.cic.motor_quote_service.entity.MotorQuote;
 import com.cic.motor_quote_service.exception.QuoteNotFoundException;
 import com.cic.motor_quote_service.repository.MotorQuoteRepository;
@@ -38,7 +39,7 @@ public class MotorQuoteService {
     private static final int VEHICLE_AGE_THRESHOLD = 10;
 
     @Transactional
-    public QuoteResponse createQuote(QuoteRequest request) {
+    public QuoteResponse createQuote(CreateQuoteRequest request) {
         log.info("Creating motor quote for vehicle: {}", request.getVehicleRegNumber());
 
         BigDecimal premium = calculatePremium(request);
@@ -86,7 +87,7 @@ public class MotorQuoteService {
     }
 
     // Private business logic methods
-    private BigDecimal calculatePremium(QuoteRequest request) {
+    private BigDecimal calculatePremium(CreateQuoteRequest request) {
         BigDecimal basePremium = request.getSumInsured().multiply(BASE_RATE);
 
         int vehicleAge = LocalDateTime.now().getYear() - request.getVehicleYear();

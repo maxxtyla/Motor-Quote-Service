@@ -1,4 +1,4 @@
-package com.cic.motor_quote_service.dto;
+package com.cic.motor_quote_service.dto.request;
 
 import jakarta.validation.constraints.*;
 import lombok.Builder;
@@ -12,9 +12,9 @@ import lombok.Builder;
 
 @Data
 @Builder
-@NoArgsConstructor  // <--- 
+@NoArgsConstructor  // <---
 @AllArgsConstructor // <--- Required if you use @Builder or @NoArgsConstructor together
-public class QuoteRequest {
+public class CreateQuoteRequest {
 
     @NotBlank(message = "Vehicle registration number is required")
     @Pattern(regexp = "^[A-Z]{3}\\s?\\d{3}[A-Z]$", message = "Invalid Kenyan plate format (e.g., KBA 123A)")

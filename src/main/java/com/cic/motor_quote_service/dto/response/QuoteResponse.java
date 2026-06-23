@@ -1,4 +1,4 @@
-package com.cic.motor_quote_service.dto;
+package com.cic.motor_quote_service.dto.response;
 
 import com.cic.motor_quote_service.exception.QuoteNotFoundException;
 import lombok.Builder;

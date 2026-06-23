@@ -1,8 +1,8 @@
 package com.cic.motor_quote_service.controller;
 
-import com.cic.motor_quote_service.dto.QuoteRequest;
-import com.cic.motor_quote_service.dto.QuoteResponse;
+import com.cic.motor_quote_service.dto.request.CreateQuoteRequest;
 import com.cic.motor_quote_service.service.MotorQuoteService;
+import com.cic.motor_quote_service.dto.response.QuoteResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,7 +32,7 @@ public class MotorQuoteController {
      */
     @PostMapping
     public ResponseEntity<QuoteResponse> createQuote(
-            @Valid @RequestBody QuoteRequest request) {
+            @Valid @RequestBody CreateQuoteRequest request) {
         log.info("POST /api/v1/motor-quotes - Creating quote for: {}", request.getVehicleRegNumber());
 
         QuoteResponse response = quoteService.createQuote(request);
