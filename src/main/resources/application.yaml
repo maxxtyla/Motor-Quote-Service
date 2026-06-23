@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: motor-quote-service
+  datasource:
+    url: jdbc:postgresql://localhost:5432/cic_motor_quotes
+    username: postgres
+    password: Scientist-01
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update  # Use  in production
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+server:
+  port: 8080
+
+logging:
+  level:
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
