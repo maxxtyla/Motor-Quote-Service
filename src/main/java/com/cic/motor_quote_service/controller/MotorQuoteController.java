@@ -1,8 +1,8 @@
 package com.cic.motor_quote_service.controller;
 
 import com.cic.motor_quote_service.dto.request.CreateQuoteRequest;
-import com.cic.motor_quote_service.service.MotorQuoteService;
 import com.cic.motor_quote_service.dto.response.QuoteResponse;
+import com.cic.motor_quote_service.service.MotorQuoteService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -13,8 +13,8 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 /**
- * API Layer: Receives HTTP requests, validates input, returns responses.
- * Contains ZERO business logic. Delegates everything to Service.
+ * API Layer: Motor quote endpoints.
+ * Zero business logic — all delegation to MotorQuoteService.
  *
  * Base path: /api/v1/motor-quotes
  */
@@ -26,46 +26,35 @@ public class MotorQuoteController {
 
     private final MotorQuoteService quoteService;
 
-    /**
-     * POST /api/v1/motor-quotes
-     * Create a new motor insurance quote
-     */
+    /** POST /api/v1/motor-quotes */
     @PostMapping
     public ResponseEntity<QuoteResponse> createQuote(
             @Valid @RequestBody CreateQuoteRequest request) {
-        log.info("POST /api/v1/motor-quotes - Creating quote for: {}", request.getVehicleRegNumber());
-
-        QuoteResponse response = quoteService.createQuote(request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        log.info("POST /api/v1/motor-quotes - vehicle: {}", request.getVehicleRegNumber());
+        return ResponseEntity.status(HttpStatus.CREATED).body(quoteService.createQuote(request));
     }
 
-    /**
-     * GET /api/v1/motor-quotes/{quoteNumber}
-     * Retrieve a quote by its unique number
-     */
+    /** GET /api/v1/motor-quotes/{quoteNumber} */
     @GetMapping("/{quoteNumber}")
-    public ResponseEntity<QuoteResponse> getQuote(
-            @PathVariable String quoteNumber) {
+    public ResponseEntity<QuoteResponse> getQuote(@PathVariable String quoteNumber) {
+        log.info("GET /api/v1/motor-quotes/{}", quoteNumber.trim());
+        return ResponseEntity.ok(quoteService.getQuoteByNumber(quoteNumber));
+    }
 
-        String cleanQuoteNumber = quoteNumber.trim();
-        log.info("GET /api/v1/motor-quotes/{}", cleanQuoteNumber);
-
-        QuoteResponse response = quoteService.getQuoteByNumber(cleanQuoteNumber);
-        return ResponseEntity.ok(response);
+    /** GET /api/v1/motor-quotes/search?regNumber=KBA123A */
+    @GetMapping("/search")
+    public ResponseEntity<List<QuoteResponse>> searchByReg(@RequestParam String regNumber) {
+        log.info("GET /api/v1/motor-quotes/search?regNumber=[{}]", regNumber);
+        return ResponseEntity.ok(quoteService.searchByRegNumber(regNumber));
     }
 
     /**
-     * GET /api/v1/motor-quotes/search?regNumber=KBA
-     * Search quotes by vehicle registration number
+     * PATCH /api/v1/motor-quotes/{quoteNumber}/activate
+     * Moves a DRAFT quote to ACTIVE — called after underwriter approval.
      */
-    @GetMapping("/search")
-    public ResponseEntity<List<QuoteResponse>> searchByReg(
-            @RequestParam String regNumber) {
-
-        String cleanReg = regNumber.strip(); // handles URL-encoded spaces too
-        log.info("GET /api/v1/motor-quotes/search?regNumber=[{}]", cleanReg);
-
-        List<QuoteResponse> results = quoteService.searchByRegNumber(cleanReg);
-        return ResponseEntity.ok(results);
+    @PatchMapping("/{quoteNumber}/activate")
+    public ResponseEntity<QuoteResponse> activateQuote(@PathVariable String quoteNumber) {
+        log.info("PATCH /api/v1/motor-quotes/{}/activate", quoteNumber);
+        return ResponseEntity.ok(quoteService.activateQuote(quoteNumber));
     }
 }

@@ -1,6 +1,6 @@
 package com.cic.motor_quote_service.dto.response;
 
-import com.cic.motor_quote_service.exception.QuoteNotFoundException;
+import com.cic.motor_quote_service.exception.ResourceNotFoundException;
 import lombok.Builder;
 import lombok.Data;
 

@@ -1,20 +1,21 @@
 package com.cic.motor_quote_service.dto.request;
 
 import jakarta.validation.constraints.*;
-import lombok.Builder;
-import lombok.Data;
+import lombok.*;
 
 import java.math.BigDecimal;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import lombok.Builder;
 
 @Data
 @Builder
-@NoArgsConstructor  // <---
-@AllArgsConstructor // <--- Required if you use @Builder or @NoArgsConstructor together
+@NoArgsConstructor
+@AllArgsConstructor
 public class CreateQuoteRequest {
+
+    /**
+     * Optional — link this quote to a registered policyholder.
+     * If null, the quote is created as a "walk-in" and can be linked later.
+     */
+    private String customerNumber;
 
     @NotBlank(message = "Vehicle registration number is required")
     @Pattern(regexp = "^[A-Z]{3}\\s?\\d{3}[A-Z]$", message = "Invalid Kenyan plate format (e.g., KBA 123A)")
