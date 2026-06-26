@@ -1,15 +1,19 @@
 package com.cic.motor_quote_service.service;
 
+import com.cic.motor_quote_service.MotorQuoteServiceApplication;
 import com.cic.motor_quote_service.dto.request.LoginRequest;
 import com.cic.motor_quote_service.dto.request.RefreshTokenRequest;
+import com.cic.motor_quote_service.dto.request.RegisterRequest;
 import com.cic.motor_quote_service.dto.response.AuthResponse;
 import com.cic.motor_quote_service.entity.AppUser;
 import com.cic.motor_quote_service.entity.RefreshToken;
+import com.cic.motor_quote_service.exception.DuplicateResourceException;
 import com.cic.motor_quote_service.repository.AppUserRepository;
 import com.cic.motor_quote_service.repository.RefreshTokenRepository;
 import com.cic.motor_quote_service.security.JwtService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.SpringApplication;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -17,6 +21,8 @@ import org.springframework.security.authentication.LockedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -54,11 +60,45 @@ public class AuthService {
     private final AppUserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final JwtService jwtService;
-
+    private final PasswordEncoder passwordEncoder;
     private static final int MAX_FAILED_ATTEMPTS = 5;
     // Lock for 30 minutes after MAX_FAILED_ATTEMPTS
     private static final int LOCK_DURATION_MINUTES = 30;
+    @Transactional
+    public AuthResponse register(RegisterRequest request) {
+        // Check username not already taken
+        if (userRepository.existsByUsername(request.getUsername())) {
+            throw new DuplicateResourceException(
+                    "Username already taken: " + request.getUsername());
+        }
 
+        // Check email not already registered
+        if (userRepository.existsByEmail(request.getEmail())) {
+            throw new DuplicateResourceException(
+                    "Email already registered: " + request.getEmail());
+        }
+
+        // Build the user — password is hashed here by Spring's encoder
+        // Plain text password NEVER touches the database
+        AppUser newUser = AppUser.builder()
+                .username(request.getUsername())
+                .passwordHash(passwordEncoder.encode(request.getPassword()))
+                .email(request.getEmail())
+                .fullName(request.getFullName())
+                .role(AppUser.Role.ROLE_USER)   // New signups are always ROLE_USER
+                .build();                        // Admin promotes manually if needed
+
+        AppUser saved = userRepository.save(newUser);
+
+        // Issue tokens immediately — user is logged in after registration
+        String accessToken  = jwtService.generateAccessToken(saved);
+        String refreshToken = jwtService.generateRefreshToken(saved);
+        persistRefreshToken(saved, refreshToken, "registration");
+
+        log.info("REGISTRATION SUCCESS | user={} | email={}", saved.getUsername(), saved.getEmail());
+
+        return buildAuthResponse(saved, accessToken, refreshToken);
+    }
     @Transactional
     public AuthResponse login(LoginRequest request, String ipAddress) {
         log.info("Login attempt | user={} | ip={}", request.getUsername(), ipAddress);
