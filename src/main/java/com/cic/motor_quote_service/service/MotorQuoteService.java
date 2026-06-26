@@ -3,13 +3,13 @@ package com.cic.motor_quote_service.service;
 import com.cic.motor_quote_service.dto.request.CreateQuoteRequest;
 import com.cic.motor_quote_service.dto.response.QuoteResponse;
 import com.cic.motor_quote_service.entity.MotorQuote;
-import com.cic.motor_quote_service.entity.PolicyHolder;
+import com.cic.motor_quote_service.entity.AppUser;
 import com.cic.motor_quote_service.entity.Vehicle;
 import com.cic.motor_quote_service.exception.ResourceNotFoundException;
 import com.cic.motor_quote_service.kafka.KafkaEvents;
 import com.cic.motor_quote_service.kafka.QuoteEventProducer;
 import com.cic.motor_quote_service.repository.MotorQuoteRepository;
-import com.cic.motor_quote_service.repository.PolicyHolderRepository;
+import com.cic.motor_quote_service.repository.AppUserRepository;
 import com.cic.motor_quote_service.repository.VehicleRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,7 +41,7 @@ import java.util.stream.Collectors;
 public class MotorQuoteService {
 
     private final MotorQuoteRepository quoteRepository;
-    private final PolicyHolderRepository policyHolderRepository;
+    private final AppUserRepository appUserRepository;
     private final VehicleRepository vehicleRepository;
     private final QuoteEventProducer quoteEventProducer;
 
@@ -60,9 +60,9 @@ public class MotorQuoteService {
     public QuoteResponse createQuote(CreateQuoteRequest request) {
         log.info("Creating motor quote for vehicle: {}", request.getVehicleRegNumber());
 
-        PolicyHolder policyholder = null;
+        AppUser policyholder = null;
         if (request.getCustomerNumber() != null) {
-            policyholder = policyHolderRepository
+            policyholder = appUserRepository
                     .findByCustomerNumber(request.getCustomerNumber().strip())
                     .orElseThrow(() -> new ResourceNotFoundException(
                             "Policyholder not found: " + request.getCustomerNumber()));

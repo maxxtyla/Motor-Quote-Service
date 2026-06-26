@@ -11,7 +11,9 @@ import java.util.Optional;
 
 /**
  * Repository for CIC system users.
- * Used by UserDetailsService and AuthService.
+ * Used by UserDetailsService and AuthService for login, and by
+ * MotorQuoteService / PaymentService for policyholder lookups — AppUser
+ * now covers both responsibilities (merged from the old PolicyHolder table).
  */
 @Repository
 public interface AppUserRepository extends JpaRepository<AppUser, Long> {
@@ -23,6 +25,24 @@ public interface AppUserRepository extends JpaRepository<AppUser, Long> {
     boolean existsByUsername(String username);
 
     boolean existsByEmail(String email);
+
+    // ── Policyholder-style lookups (merged from PolicyHolderRepository) ───────
+
+    Optional<AppUser> findByCustomerNumber(String customerNumber);
+
+    Optional<AppUser> findByIdNumber(String idNumber);
+
+    Optional<AppUser> findByPhoneNumber(String phoneNumber);
+
+    boolean existsByIdNumber(String idNumber);
+
+    /**
+     * Custom JPQL — fetch the user and eagerly load their quotes
+     * in one query using a JOIN FETCH. Use ONLY when you need both.
+     * Don't call this from every screen — it can return huge result sets.
+     */
+    @Query("SELECT u FROM AppUser u LEFT JOIN FETCH u.quotes WHERE u.id = :id")
+    Optional<AppUser> findByIdWithQuotes(@Param("id") Long id);
 
     /**
      * Increment failed login attempts atomically.

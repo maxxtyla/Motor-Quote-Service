@@ -16,7 +16,7 @@ import java.util.List;
  *
  * INTERN NOTE ON RELATIONSHIPS:
  *   - @ManyToOne(fetch = FetchType.LAZY)  ← ALWAYS add this. Without it,
- *     loading one quote would also load the entire PolicyHolder and Vehicle rows.
+ *     loading one quote would also load the entire AppUser and Vehicle rows.
  *   - @OneToMany(mappedBy = ..., fetch = FetchType.LAZY)  ← default, but explicit.
  *   - Never call quote.getPolicyholder().getQuotes() inside a loop — that's an N+1.
  *
@@ -24,6 +24,11 @@ import java.util.List;
  * The denormalised columns (vehicle_make, vehicle_model, etc.) are kept
  * intentionally — they snapshot the vehicle at quote time so historical
  * quotes are not affected if the Vehicle record changes later.
+ *
+ * MERGE NOTE: "policyholder" used to point at a separate PolicyHolder
+ * entity/table. It now points at AppUser, since the customer and the
+ * portal login are the same person. The column name (policyholder_id)
+ * is unchanged to avoid a DB migration.
  */
 @Entity
 @Table(name = "motor_quotes",
@@ -49,13 +54,17 @@ public class MotorQuote {
     // ── FK Relationships (LAZY — critical for performance) ────────────────────
 
     /**
-     * The customer this quote belongs to.
-     * FetchType.LAZY: JPA will NOT load PolicyHolder when you load MotorQuote.
+     * The customer (AppUser) this quote belongs to.
+     * AppUser now holds both login credentials AND policyholder/KYC data,
+     * so this FK points at app_users.id — column name kept as
+     * policyholder_id since that's already the column in the existing DB.
+     *
+     * FetchType.LAZY: JPA will NOT load the AppUser when you load MotorQuote.
      * Access it only when you explicitly need it, inside a transaction.
      */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "policyholder_id")
-    private PolicyHolder policyholder;
+    private AppUser policyholder;
 
     /**
      * The specific vehicle being quoted.

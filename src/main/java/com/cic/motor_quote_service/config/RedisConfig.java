@@ -26,7 +26,7 @@ import java.util.Map;
  *
  *   1. CACHING via Spring Cache (@Cacheable / @CacheEvict)
  *      - Quote lookups by quoteNumber
- *      - PolicyHolder lookups (called frequently during payment)
+ *      - AppUser/policyholder lookups (called frequently during payment)
  *      - Uses RedisCacheManager with per-cache TTLs
  *
  *   2. DISTRIBUTED LOCKING via Redisson RLock
@@ -104,7 +104,7 @@ public class RedisConfig {
                 // Quotes don't change often — cache for 15 minutes
                 "quotes",       defaultConfig.entryTtl(Duration.ofMinutes(15)),
 
-                // PolicyHolders are mostly static after creation — cache longer
+                // AppUser/policyholder data is mostly static after creation — cache longer
                 "policyholders", defaultConfig.entryTtl(Duration.ofMinutes(30)),
 
                 // Payment status changes frequently — short TTL

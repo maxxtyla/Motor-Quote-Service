@@ -78,6 +78,12 @@ public class AuthService {
                     "Email already registered: " + request.getEmail());
         }
 
+        // Check ID number not already registered — one portal account per person
+        if (userRepository.existsByIdNumber(request.getIdNumber())) {
+            throw new DuplicateResourceException(
+                    "An account already exists for ID number: " + request.getIdNumber());
+        }
+
         // Build the user — password is hashed here by Spring's encoder
         // Plain text password NEVER touches the database
         AppUser newUser = AppUser.builder()
@@ -86,7 +92,17 @@ public class AuthService {
                 .email(request.getEmail())
                 .fullName(request.getFullName())
                 .role(AppUser.Role.ROLE_USER)   // New signups are always ROLE_USER
-                .build();                        // Admin promotes manually if needed
+                // ── Policyholder / KYC fields — same person, same row ──────────
+                .customerNumber(generateCustomerNumber())
+                .firstName(request.getFirstName().trim())
+                .lastName(request.getLastName().trim())
+                .idNumber(request.getIdNumber().trim())
+                .phoneNumber(request.getPhoneNumber().trim())
+                .dateOfBirth(request.getDateOfBirth())
+                .address(request.getAddress())
+                .city(request.getCity())
+                .kraPin(request.getKraPin())
+                .build();                        // Admin promotes role manually if needed
 
         AppUser saved = userRepository.save(newUser);
 
@@ -95,7 +111,8 @@ public class AuthService {
         String refreshToken = jwtService.generateRefreshToken(saved);
         persistRefreshToken(saved, refreshToken, "registration");
 
-        log.info("REGISTRATION SUCCESS | user={} | email={}", saved.getUsername(), saved.getEmail());
+        log.info("REGISTRATION SUCCESS | user={} | email={} | customerNumber={}",
+                saved.getUsername(), saved.getEmail(), saved.getCustomerNumber());
 
         return buildAuthResponse(saved, accessToken, refreshToken);
     }
@@ -238,7 +255,21 @@ public class AuthService {
                 .username(user.getUsername())
                 .role(user.getRole().name())
                 .fullName(user.getFullName())
+                .customerNumber(user.getCustomerNumber())
                 .build();
+    }
+
+    /**
+     * Generates a customer-facing reference number for a newly registered
+     * policyholder, e.g. "CIC-2026-00001".
+     * In production: replace the suffix with a DB sequence for guaranteed
+     * uniqueness. For now: timestamp millis last 5 digits (matches the
+     * scheme previously used by PolicyHolderService).
+     */
+    private String generateCustomerNumber() {
+        String year = String.valueOf(LocalDateTime.now().getYear());
+        String seq = String.format("%05d", System.currentTimeMillis() % 100000);
+        return "CIC-" + year + "-" + seq;
     }
 
     /**

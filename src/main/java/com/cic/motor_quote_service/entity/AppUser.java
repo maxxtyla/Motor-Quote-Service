@@ -8,19 +8,27 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
 /**
  * CIC system user — maps to PostgreSQL table: app_users.
  *
+ * MERGED ENTITY: this used to be two tables (app_users for login,
+ * policyholders for customer data). Since every policyholder logs in to
+ * the portal with the same credentials they buy policies with, the two
+ * are now ONE row in ONE table. Login fields and customer/KYC fields
+ * live side by side here.
+ *
  * Implements UserDetails so Spring Security can load and validate
  * this entity directly from the database.
  *
  * ROLES:
  *   ROLE_ADMIN  — full access (can DELETE, view audit logs)
- *   ROLE_USER   — read-only + can create/update quotes (no deletes)
+ *   ROLE_USER   — a customer/policyholder — can create/update their own quotes
  *   ROLE_AGENT  — CIC field agent, same as ROLE_USER but scoped to own records
  *
  * INTERN NOTE: We implement UserDetails here rather than a separate adapter
@@ -43,6 +51,8 @@ public class AppUser implements UserDetails {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    // ── Login / auth fields ──────────────────────────────────────────────────
 
     @Column(name = "username", nullable = false, unique = true, length = 50)
     private String username;                // Login identifier
@@ -80,6 +90,56 @@ public class AppUser implements UserDetails {
     @Column(name = "locked_until")
     private LocalDateTime lockedUntil;      // Null = not locked
 
+    // ── Customer / policyholder (KYC) fields ─────────────────────────────────
+    // These used to live on a separate `policyholders` table — merged here
+    // because the customer and the portal login are the same person.
+
+    @Column(name = "customer_number", unique = true, length = 20)
+    private String customerNumber;          // e.g., "CIC-2026-00001"
+
+    @Column(name = "first_name", length = 50)
+    private String firstName;
+
+    @Column(name = "last_name", length = 50)
+    private String lastName;
+
+    /**
+     * Kenyan National ID number. Unique per person.
+     * Stored as VARCHAR — never Integer (leading zeros, future formats).
+     */
+    @Column(name = "id_number", unique = true, length = 20)
+    private String idNumber;
+
+    @Column(name = "phone_number", length = 15)
+    private String phoneNumber;             // Format: 2547XXXXXXXX
+
+    @Column(name = "date_of_birth")
+    private LocalDate dateOfBirth;
+
+    @Column(name = "address", length = 200)
+    private String address;
+
+    @Column(name = "city", length = 50)
+    private String city;
+
+    /**
+     * Kenya Revenue Authority PIN — required for premiums above KES 100,000.
+     * Optional at quote stage, mandatory at policy issuance.
+     */
+    @Column(name = "kra_pin", length = 20)
+    private String kraPin;
+
+    // ── Relationships ──────────────────────────────────────────────────────────
+
+    /**
+     * Quotes belonging to this user (as the policyholder).
+     * LAZY — we never want to pull all quotes just because we loaded a user.
+     * Use motorQuoteRepository.findByPolicyholderId() when you need the quotes.
+     */
+    @OneToMany(mappedBy = "policyholder", fetch = FetchType.LAZY, cascade = CascadeType.ALL)
+    @Builder.Default
+    private List<MotorQuote> quotes = new ArrayList<>();
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -87,6 +147,17 @@ public class AppUser implements UserDetails {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    // ── Convenience ───────────────────────────────────────────────────────────
+
+    /** Full name helper for the policyholder fields — derived at runtime, never stored. */
+    @Transient
+    public String getPolicyholderFullName() {
+        if (firstName == null && lastName == null) {
+            return fullName;
+        }
+        return ((firstName != null ? firstName : "") + " " + (lastName != null ? lastName : "")).trim();
+    }
 
     // ── UserDetails contract ──────────────────────────────────────────────────
 

@@ -17,4 +17,5 @@ public class AuthResponse {
     private String username;
     private String role;
     private String fullName;
+    private String customerNumber;      // e.g. "CIC-2026-00001" — null for staff-only accounts
 }

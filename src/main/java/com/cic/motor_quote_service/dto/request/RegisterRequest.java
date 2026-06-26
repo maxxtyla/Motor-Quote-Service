@@ -3,6 +3,17 @@ package com.cic.motor_quote_service.dto.request;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
+import java.time.LocalDate;
+
+/**
+ * Registration request for the CIC customer portal.
+ *
+ * MERGE NOTE: AppUser and PolicyHolder are now one table/entity — signing up
+ * for a login also registers you as a policyholder, so this request carries
+ * both the auth fields (username/password/email) and the KYC/customer fields
+ * (idNumber, dateOfBirth, address, city, kraPin) that used to live on a
+ * separate CreatePolicyHolderRequest.
+ */
 @Data
 public class RegisterRequest {
 
@@ -30,4 +41,36 @@ public class RegisterRequest {
     @NotBlank(message = "Phone number is required")
     @Pattern(regexp = "^2547\\d{8}$", message = "Phone must be in format 2547XXXXXXXX")
     private String phoneNumber;
+
+    // ── Policyholder / KYC fields ────────────────────────────────────────────
+
+    @NotBlank(message = "First name is required")
+    @Size(max = 50)
+    private String firstName;
+
+    @NotBlank(message = "Last name is required")
+    @Size(max = 50)
+    private String lastName;
+
+    /**
+     * Kenyan National ID — 7 or 8 digits.
+     * Foreigners use passport number (alphanumeric, up to 20 chars).
+     */
+    @NotBlank(message = "ID number is required")
+    @Size(max = 20)
+    private String idNumber;
+
+    @NotNull(message = "Date of birth is required")
+    @Past(message = "Date of birth must be in the past")
+    private LocalDate dateOfBirth;
+
+    @Size(max = 200)
+    private String address;                 // Optional
+
+    @Size(max = 50)
+    private String city;                    // Optional
+
+    /** KRA PIN format: A followed by 9 digits and a letter, e.g. A123456789B */
+    @Pattern(regexp = "^[A-Z]\\d{9}[A-Z]$", message = "Invalid KRA PIN format")
+    private String kraPin;                  // Optional at registration
 }

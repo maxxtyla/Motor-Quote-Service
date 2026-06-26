@@ -11,7 +11,10 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update
+      # validate: app checks entities match your existing schema on startup
+      # and fails fast if they don't. It will NEVER create or alter tables —
+      # schema is owned and managed by you outside this application.
+      ddl-auto: validate
     show-sql: true               # Set to true for local dev only
     properties:
       hibernate:
