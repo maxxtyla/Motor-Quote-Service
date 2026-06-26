@@ -1,0 +1,129 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CIC Motor Quote Service — Local Development Stack
+#
+# Starts: PostgreSQL, Redis, Zookeeper, Kafka, Kafka UI
+#
+# Usage:
+#   Start all:        docker compose up -d
+#   Start only DB:    docker compose up -d postgres
+#   View logs:        docker compose logs -f kafka
+#   Stop all:         docker compose down
+#   Wipe all data:    docker compose down -v    ← deletes volumes too
+#
+# Ports exposed on your Windows machine:
+#   PostgreSQL  → localhost:5432
+#   Redis       → localhost:6379
+#   Kafka       → localhost:9092
+#   Kafka UI    → http://localhost:8090
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: cic-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cic_motor_quotes
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Scientist-01      # Matches your application.yaml
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Run init SQL on first boot (creates roles, seeds admin user)
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cic_motor_quotes"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: cic-redis
+    restart: unless-stopped
+    # No auth on local dev — matches REDIS_PASSWORD: "" in application.yaml
+    command: redis-server --save 60 1 --loglevel warning
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  # ── Kafka ───────────────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: cic-kafka
+    restart: unless-stopped
+
+    ports:
+      # 9092: used by your Spring Boot app (running on Windows host)
+      # 29092: used by other Docker containers talking to Kafka
+      - "9092:9092"
+    environment:
+      CLUSTER_ID: TLu4KhnSSpOUlirH1ibaSg
+
+
+      # Two listeners:
+      #   PLAINTEXT_HOST → accessible from your Windows host (localhost:9092)
+      #   PLAINTEXT       → accessible from other Docker containers
+      KAFKA_NODE_ID: 1
+
+      KAFKA_PROCESS_ROLES: broker,controller
+
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:29093
+
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1       # 1 broker in dev
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0       # Faster startup in dev
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"         # Spring creates topics automatically
+      KAFKA_LOG_RETENTION_HOURS: 24                   # Short retention for dev
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── Kafka UI ─────────────────────────────────────────────────────────────────
+  # Browse topics, produce test messages, inspect consumer group lag.
+  # Open: http://localhost:8090
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: cic-kafka-ui
+    restart: unless-stopped
+    depends_on:
+      - kafka
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: cic-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+
+# ── Named Volumes (data persists across `docker compose down`) ────────────────
+volumes:
+  postgres-data:
+  redis-data:
+  kafka-data:
