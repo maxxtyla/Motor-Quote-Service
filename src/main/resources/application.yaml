@@ -72,9 +72,8 @@ app:
 #   passkey:    bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919
 #   Test phone: 254708374149
 #
-# NEVER commit real production credentials. Use env vars for all secrets.
+#  Use env vars for all secrets.
 # Set MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_PASSKEY, MPESA_CALLBACK_URL
-# in your Kubernetes Secret or docker-compose .env file.
 #
 mpesa:
   base-url: ${MPESA_BASE_URL:https://sandbox.safaricom.co.ke}
@@ -82,14 +81,14 @@ mpesa:
   consumer-secret: ${MPESA_CONSUMER_SECRET}
   shortcode: ${MPESA_SHORTCODE:174379}
   passkey: ${MPESA_PASSKEY}
-  callback-url: ${MPESA_CALLBACK_URL}        # e.g. https://abc123.ngrok-free.app/payments/mpesa/callback
+  callback-url: ${MPESA_CALLBACK_URL}
   token-cache-ttl-seconds: 3500              # refresh token 99s before Safaricom's 3599s expiry
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging:
   level:
     com.cic.motor_quote_service: INFO
-    org.springframework.security: WARN    # Set to DEBUG when troubleshooting auth
+    org.springframework.security: DEBUG    # Set to DEBUG when troubleshooting auth
     org.springframework.kafka: WARN
     org.redisson: WARN
   pattern:
