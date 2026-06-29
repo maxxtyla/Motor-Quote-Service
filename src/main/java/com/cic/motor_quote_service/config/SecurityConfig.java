@@ -23,29 +23,28 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 /**
  * Spring Security 6 configuration for CIC Motor Quote Service.
  *
- * KEY DECISIONS:
- *   - CSRF disabled: we are a stateless REST API; CSRF only matters for
- *     browser-session-based apps. Our clients send JWT, not cookies.
- *   - Session policy STATELESS: Spring Security will never create an HttpSession.
- *     Every request must carry a valid JWT — no server-side sessions.
- *   - @EnableMethodSecurity: enables @PreAuthorize at the method level.
- *     Use this to gate individual service methods by role.
+ * PHASE 2 UPDATE:
+ *   - Anonymous users can create and view motor quotes.
+ *   - Only authenticated users can initiate payments (ownership enforced in PaymentService).
+ *   - M-Pesa callback remains public (called by Safaricom, not our client).
  *
  * PUBLIC ENDPOINTS (no JWT required):
- *   POST /auth/login     — get tokens
- *   POST /auth/refresh   — exchange refresh token for new access token
- *   GET  /actuator/health — Kubernetes liveness/readiness probe
+ *   POST /auth/register, /auth/login, /auth/refresh
+ *   GET  /actuator/health, /actuator/info
+ *   POST /api/v1/motor-quotes                    — anonymous quote creation
+ *   GET  /api/v1/motor-quotes/**                 — anonymous quote lookup
+ *   POST /api/v1/payments/mpesa/callback           — M-Pesa server-to-server callback
  *
- * ROLE-BASED RULES:
+ * PROTECTED ENDPOINTS (JWT required):
+ *   POST /api/v1/payments/**                       — payment initiation (ownership checked)
+ *   All other /api/**                              — default authenticated
+ *
+ * ROLE-BASED:
  *   DELETE on any /api/** → ROLE_ADMIN only
- *   Everything else authenticated → any authenticated user
- *
- * INTERN NOTE: WebSecurityConfigurerAdapter is GONE in Spring Security 6.
- * The new way is a @Bean SecurityFilterChain. Do not extend anything.
  */
 @Configuration
 @EnableWebSecurity
-@EnableMethodSecurity          // Enables @PreAuthorize, @PostAuthorize, @Secured
+@EnableMethodSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
 
@@ -55,14 +54,9 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                // ── CSRF: off (stateless JWT API) ─────────────────────────────────
                 .csrf(AbstractHttpConfigurer::disable)
-
-                // ── Session: stateless (no HttpSession) ───────────────────────────
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-
-                // ── Request authorization rules ───────────────────────────────────
                 .authorizeHttpRequests(auth -> auth
 
                         // Public auth endpoints
@@ -70,30 +64,28 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
                         .requestMatchers(HttpMethod.POST, "/auth/refresh").permitAll()
 
-                        // Kubernetes health probes — must be public
+                        // Kubernetes health probes
                         .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+
+                        // PHASE 2: Anonymous quote access
+                        .requestMatchers(HttpMethod.POST, "/api/v1/motor-quotes").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/motor-quotes/**").permitAll()
+
+                        // M-Pesa callback — called by Safaricom, must be public
+                        .requestMatchers(HttpMethod.POST, "/api/v1/payments/mpesa/callback").permitAll()
 
                         // Role-based: only ADMIN can DELETE anything
                         .requestMatchers(HttpMethod.DELETE, "/api/**").hasRole("ADMIN")
 
-                        // All remaining API calls require authentication
-                        // Role granularity is enforced at the @PreAuthorize level
+                        // Everything else requires authentication
                         .anyRequest().authenticated()
                 )
-
-                // ── Auth provider: username/password from DB ──────────────────────
                 .authenticationProvider(authenticationProvider())
-
-                // ── JWT filter before Spring's built-in username/password filter ──
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
 
-    /**
-     * DaoAuthenticationProvider: wires our UserDetailsService + BCrypt together.
-     * Used by AuthenticationManager during POST /auth/login.
-     */
     @Bean
     public AuthenticationProvider authenticationProvider() {
         DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
@@ -102,22 +94,11 @@ public class SecurityConfig {
         return provider;
     }
 
-    /**
-     * BCrypt with strength 12 — CIC security standard.
-     * Strength 10 is the Spring default; 12 adds ~4x more hashing time
-     * without noticeable latency on login (human-facing, happens once).
-     *
-     * NEVER use MD5, SHA-1, or plain SHA-256 for passwords.
-     */
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder(12);
     }
 
-    /**
-     * Exposes AuthenticationManager so AuthService can call it for login.
-     * Spring Boot 3 does not expose this by default — must be declared explicitly.
-     */
     @Bean
     public AuthenticationManager authenticationManager(
             AuthenticationConfiguration config) throws Exception {

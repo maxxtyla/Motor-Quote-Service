@@ -15,7 +15,6 @@ public class CreateQuoteRequest {
      * Optional — link this quote to a registered policyholder.
      * If null, the quote is created as a "walk-in" and can be linked later.
      */
-    private String customerNumber;
 
     @NotBlank(message = "Vehicle registration number is required")
     @Pattern(regexp = "^[A-Z]{3}\\s?\\d{3}[A-Z]$", message = "Invalid Kenyan plate format (e.g., KBA 123A)")

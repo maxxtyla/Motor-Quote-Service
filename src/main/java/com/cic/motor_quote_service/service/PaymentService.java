@@ -8,6 +8,7 @@ import com.cic.motor_quote_service.exception.DuplicateResourceException;
 import com.cic.motor_quote_service.exception.ResourceNotFoundException;
 import com.cic.motor_quote_service.repository.MotorQuoteRepository;
 import com.cic.motor_quote_service.repository.PaymentRepository;
+import com.cic.motor_quote_service.service.DarajaService.DarajaException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -17,20 +18,33 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.UUID;
 
 /**
- * Handles payment initiation and M-Pesa callback processing.
+ * Handles payment initiation and status queries.
  *
  * PAYMENT FLOW:
- *   1. POST /payments          → initiatePayment()  → creates PENDING record, "sends" STK push
- *   2. M-Pesa callback POST    → handleMpesaCallback() → marks COMPLETED or FAILED
- *   3. On COMPLETED            → quote status flips to CONVERTED
+ *   1. POST /api/v1/payments    → initiatePayment()
+ *        ├─ validates quote is ACTIVE
+ *        ├─ creates PENDING payment row
+ *        └─ calls DarajaService.initiateSTKPush() → Safaricom sends PIN prompt
  *
- * INTERN NOTES:
- *   - In a real system, step 1 would call Safaricom's Daraja API via WebClient.
- *     For this demo, we simulate it by just creating the PENDING record.
- *   - DataIntegrityViolationException on the payment_reference unique constraint
- *     means M-Pesa sent a duplicate callback — we handle it gracefully.
- *   - @Transactional(readOnly = false) is the default; written explicitly here
- *     for clarity since this class mixes read and write transactions.
+ *   2. Customer enters PIN on phone
+ *
+ *   3. POST /payments/mpesa/callback  → MpesaCallbackController
+ *        └─ MpesaCallbackService.handleCallback()
+ *              ├─ acquires Redisson distributed lock
+ *              ├─ marks payment COMPLETED
+ *              └─ flips quote to CONVERTED
+ *
+ * STK PUSH FAILURE HANDLING:
+ *   If DarajaService throws DarajaException (Safaricom rejected the request),
+ *   we mark the payment FAILED immediately — no callback will ever arrive.
+ *   The client can retry via POST /api/v1/payments with the same quoteNumber;
+ *   we allow a new PENDING payment because the old one is already FAILED.
+ *
+ * INTERN — the @Transactional boundary matters here:
+ *   The payment row is saved inside the transaction BEFORE calling Daraja.
+ *   If Daraja fails we catch DarajaException, mark it FAILED, and still
+ *   commit — so there's always an audit trail even for rejected pushes.
+ *   We do NOT roll back on Daraja failure.
  */
 @Service
 @RequiredArgsConstructor
@@ -39,27 +53,32 @@ public class PaymentService {
 
     private final PaymentRepository paymentRepository;
     private final MotorQuoteRepository quoteRepository;
+    private final DarajaService darajaService;
 
     @Transactional
     public PaymentResponse initiatePayment(CreatePaymentRequest request) {
         String quoteNumber = request.getQuoteNumber().strip();
-        log.info("Initiating {} payment for quote: {}", request.getPaymentMethod(), quoteNumber);
+        log.info("PAYMENT_INIT | method={} | quote={}", request.getPaymentMethod(), quoteNumber);
 
+        // ── 1. Validate quote ─────────────────────────────────────────────────
         MotorQuote quote = quoteRepository.findByQuoteNumber(quoteNumber)
                 .orElseThrow(() -> new ResourceNotFoundException("Quote not found: " + quoteNumber));
 
-        // Business rule: can only pay for an ACTIVE quote
         if (quote.getStatus() != MotorQuote.QuoteStatus.ACTIVE) {
             throw new IllegalStateException(
-                    "Quote " + quoteNumber + " is not ACTIVE (current status: " + quote.getStatus() + ")");
+                    "Quote " + quoteNumber + " must be ACTIVE before payment. "
+                            + "Current status: " + quote.getStatus());
         }
 
-        // Prevent double payment
+        // ── 2. Guard against double payment ───────────────────────────────────
+        // Allow a new attempt if the only existing payment is FAILED (customer
+        // cancelled or had insufficient funds). Block if already COMPLETED.
         if (paymentRepository.hasCompletedPayment(quote.getId())) {
             throw new DuplicateResourceException(
                     "A completed payment already exists for quote: " + quoteNumber);
         }
 
+        // ── 3. Create PENDING payment row ─────────────────────────────────────
         Payment payment = Payment.builder()
                 .quote(quote)
                 .paymentReference(generatePaymentReference())
@@ -67,67 +86,25 @@ public class PaymentService {
                 .currency("KES")
                 .paymentMethod(Payment.PaymentMethod.valueOf(request.getPaymentMethod()))
                 .status(Payment.PaymentStatus.PENDING)
-                .phoneNumber(request.getPhoneNumber())
+                .phoneNumber(request.getPhoneNumber().strip())
                 .build();
 
         Payment saved = paymentRepository.save(payment);
-        log.info("Payment initiated: {} (PENDING)", saved.getPaymentReference());
+        log.info("PAYMENT_SAVED | ref={} | amount={} | status=PENDING",
+                saved.getPaymentReference(), saved.getAmount());
 
-        // TODO Phase 3: Call Daraja API here via WebClient to trigger STK push
-        // webClient.post().uri(darajaUrl).bodyValue(stkPushRequest).retrieve()...
+        // ── 4. Fire STK push (M-Pesa only) ───────────────────────────────────
+        // Non-M-Pesa methods (AIRTEL_MONEY, PESALINK) don't go through Daraja.
+        // They are handled out-of-band by the finance team; the payment stays PENDING
+        // until a manual update or a separate integration marks it COMPLETED.
+        if (saved.getPaymentMethod() == Payment.PaymentMethod.MPESA) {
+            fireStkPush(saved);
+        } else {
+            log.info("PAYMENT_NON_MPESA | ref={} | method={} — STK push skipped",
+                    saved.getPaymentReference(), saved.getPaymentMethod());
+        }
 
         return mapToResponse(saved, quoteNumber);
-    }
-
-    /**
-     * Handles the M-Pesa callback — called by POST /payments/mpesa/callback.
-     * M-Pesa may send this multiple times; the unique constraint on
-     * mpesa_receipt_number guards against saving duplicates.
-     *
-     * @param paymentReference  Our internal reference (sent in STK push metadata)
-     * @param mpesaReceiptNumber  The receipt from M-Pesa (e.g., "QKJ12AB34C")
-     * @param success  Whether the customer completed the payment
-     */
-    @Transactional
-    public void handleMpesaCallback(String paymentReference, String mpesaReceiptNumber,
-                                    boolean success) {
-        log.info("M-Pesa callback received for ref: {} — success={}", paymentReference, success);
-
-        Payment payment = paymentRepository.findByPaymentReference(paymentReference)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Payment not found for reference: " + paymentReference));
-
-        // Guard: don't process an already-completed payment
-        if (payment.getStatus() == Payment.PaymentStatus.COMPLETED) {
-            log.warn("Duplicate M-Pesa callback for {}. Ignoring.", paymentReference);
-            return;
-        }
-
-        try {
-            if (success) {
-                payment.setStatus(Payment.PaymentStatus.COMPLETED);
-                payment.setMpesaReceiptNumber(mpesaReceiptNumber);
-
-                // Convert the quote → policy trigger
-                MotorQuote quote = payment.getQuote();
-                quote.setStatus(MotorQuote.QuoteStatus.CONVERTED);
-                quoteRepository.save(quote);
-
-                log.info("Quote {} CONVERTED after successful payment {}",
-                        quote.getQuoteNumber(), mpesaReceiptNumber);
-            } else {
-                payment.setStatus(Payment.PaymentStatus.FAILED);
-                payment.setRetryCount(payment.getRetryCount() + 1);
-                log.warn("Payment FAILED for ref: {} (retry #{})",
-                        paymentReference, payment.getRetryCount());
-            }
-
-            paymentRepository.save(payment);
-
-        } catch (DataIntegrityViolationException e) {
-            // M-Pesa sent the same receipt number twice — safe to ignore
-            log.warn("Duplicate M-Pesa receipt number: {}. Callback already processed.", mpesaReceiptNumber);
-        }
     }
 
     @Transactional(readOnly = true)
@@ -138,7 +115,47 @@ public class PaymentService {
         return mapToResponse(payment, payment.getQuote().getQuoteNumber());
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    /**
+     * Calls DarajaService to send the STK push, then stores the CheckoutRequestID.
+     *
+     * If Daraja rejects the request (network error, invalid credentials, wrong
+     * phone format, etc.), we catch DarajaException, mark the payment FAILED,
+     * and save — so the client gets a meaningful error response and the audit
+     * trail is intact. No payment row is left as a zombie PENDING.
+     */
+    private void fireStkPush(Payment payment) {
+        try {
+            String checkoutRequestId = darajaService.initiateSTKPush(
+                    payment.getPaymentReference(),
+                    payment.getAmount(),
+                    payment.getPhoneNumber()
+            );
+
+            // Store Safaricom's CheckoutRequestID for reconciliation
+            payment.setCheckoutRequestId(checkoutRequestId);
+            paymentRepository.save(payment);
+
+            log.info("STK_PUSH_SENT | ref={} | checkoutRequestId={}",
+                    payment.getPaymentReference(), checkoutRequestId);
+
+        } catch (DarajaException e) {
+            // Daraja rejected our request — mark payment FAILED immediately.
+            // The client will get status=FAILED in the response and can retry.
+            log.error("STK_PUSH_REJECTED | ref={} | reason={}",
+                    payment.getPaymentReference(), e.getMessage());
+
+            payment.setStatus(Payment.PaymentStatus.FAILED);
+            payment.setRetryCount(payment.getRetryCount() + 1);
+            paymentRepository.save(payment);
+
+            // Re-throw so PaymentController returns a 502 with a useful message
+            throw new DarajaException(
+                    "M-Pesa STK push failed — please check the phone number and try again. "
+                            + "Reason: " + e.getMessage(), e);
+        }
+    }
 
     private String generatePaymentReference() {
         return "PAY-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
@@ -146,7 +163,7 @@ public class PaymentService {
 
     private PaymentResponse mapToResponse(Payment p, String quoteNumber) {
         String statusMessage = switch (p.getStatus()) {
-            case PENDING   -> "Waiting for customer to complete payment";
+            case PENDING   -> "STK push sent — waiting for customer to enter M-Pesa PIN";
             case COMPLETED -> "Payment confirmed — M-Pesa receipt: " + p.getMpesaReceiptNumber();
             case FAILED    -> "Payment failed. Please retry.";
             case REFUNDED  -> "Payment has been refunded";

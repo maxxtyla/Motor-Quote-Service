@@ -56,6 +56,35 @@ app:
     access-token-expiry-ms: 900000         # 15 minutes
     refresh-token-expiry-ms: 604800000     # 7 days
 
+# ── M-Pesa / Daraja Configuration ────────────────────────────────────────────
+#
+# HOW TO GET THESE VALUES:
+#   1. Register at https://developer.safaricom.co.ke
+#   2. Create an app → copy Consumer Key + Consumer Secret
+#   3. Shortcode   = your Paybill or Till Number
+#   4. Passkey     = shown on your app's portal page under "Go Live"
+#   5. CallbackUrl = must be public HTTPS; for local dev use ngrok:
+#                    ngrok http 8080  →  https://<id>.ngrok-free.app
+#
+# SANDBOX VALUES (safe to use for local dev — not real money):
+#   base-url:   https://sandbox.safaricom.co.ke
+#   shortcode:  174379
+#   passkey:    bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919
+#   Test phone: 254708374149
+#
+# NEVER commit real production credentials. Use env vars for all secrets.
+# Set MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_PASSKEY, MPESA_CALLBACK_URL
+# in your Kubernetes Secret or docker-compose .env file.
+#
+mpesa:
+  base-url: ${MPESA_BASE_URL:https://sandbox.safaricom.co.ke}
+  consumer-key: ${MPESA_CONSUMER_KEY}
+  consumer-secret: ${MPESA_CONSUMER_SECRET}
+  shortcode: ${MPESA_SHORTCODE:174379}
+  passkey: ${MPESA_PASSKEY}
+  callback-url: ${MPESA_CALLBACK_URL}        # e.g. https://abc123.ngrok-free.app/payments/mpesa/callback
+  token-cache-ttl-seconds: 3500              # refresh token 99s before Safaricom's 3599s expiry
+
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging:
   level:

@@ -104,6 +104,19 @@
 			<version>3.32.0</version>
 		</dependency>
 
+		<!-- ── WebClient (Reactor Netty) — used by DarajaService ────────────── -->
+		<!--
+		  spring-boot-starter-webflux brings in WebClient + Reactor Netty.
+		  We are NOT switching to a reactive application — we keep Spring MVC.
+		  WebClient can be used in a blocking mode (.block()) inside a traditional
+		  Spring MVC/servlet app without any other changes. This is the recommended
+		  approach for calling external HTTP APIs from a non-reactive service.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webflux</artifactId>
+		</dependency>
+
 		<!-- ── Utilities ─────────────────────────────────────────────────────── -->
 		<dependency>
 			<groupId>org.projectlombok</groupId>

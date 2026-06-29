@@ -64,6 +64,21 @@ public class Payment {
     @Column(name = "mpesa_receipt_number", length = 50)
     private String mpesaReceiptNumber;
 
+    /**
+     * Safaricom's CheckoutRequestID — returned synchronously when we send the
+     * STK push. Null for non-M-Pesa payments.
+     *
+     * Used for:
+     *   1. Reconciliation if the callback never arrives (query /stkpushquery)
+     *   2. Matching duplicate callbacks when AccountReference is unavailable
+     *
+     * NOTE: this field is NOT in the current payments DDL — add it with a
+     * migration before deploying:
+     *   ALTER TABLE payments ADD COLUMN checkout_request_id VARCHAR(100);
+     */
+    @Column(name = "checkout_request_id", length = 100)
+    private String checkoutRequestId;
+
     @Column(name = "amount", nullable = false, precision = 15, scale = 2)
     private BigDecimal amount;
 

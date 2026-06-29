@@ -2,38 +2,32 @@ package com.cic.motor_quote_service.service;
 
 import com.cic.motor_quote_service.dto.request.CreateQuoteRequest;
 import com.cic.motor_quote_service.dto.response.QuoteResponse;
-import com.cic.motor_quote_service.entity.MotorQuote;
 import com.cic.motor_quote_service.entity.AppUser;
-import com.cic.motor_quote_service.entity.Vehicle;
+import com.cic.motor_quote_service.entity.MotorQuote;
 import com.cic.motor_quote_service.exception.ResourceNotFoundException;
-import com.cic.motor_quote_service.kafka.KafkaEvents;
-import com.cic.motor_quote_service.kafka.QuoteEventProducer;
-import com.cic.motor_quote_service.repository.MotorQuoteRepository;
 import com.cic.motor_quote_service.repository.AppUserRepository;
-import com.cic.motor_quote_service.repository.VehicleRepository;
+import com.cic.motor_quote_service.repository.MotorQuoteRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
- * Business Layer: Premium calculation and quote lifecycle.
- * PHASE 3 ADDITIONS:
- *   - @Cacheable on read methods → Redis cache for repeated lookups
- *   - @CacheEvict on write methods → invalidate stale cache entries
- *   - @PreAuthorize for role-based access control
- *   - Kafka event published on quote creation
+ * Handles motor insurance quote creation, retrieval, and lifecycle.
+ *
+ * PHASE 2 CHANGES:
+ *   - Anonymous users can create and view quotes (no JWT required).
+ *   - Logged-in users are automatically attached as the policyholder.
+ *   - Payment (in PaymentService) requires authentication and enforces ownership.
  */
 @Service
 @RequiredArgsConstructor
@@ -42,163 +36,121 @@ public class MotorQuoteService {
 
     private final MotorQuoteRepository quoteRepository;
     private final AppUserRepository appUserRepository;
-    private final VehicleRepository vehicleRepository;
-    private final QuoteEventProducer quoteEventProducer;
-
-    private static final BigDecimal BASE_RATE = new BigDecimal("0.035");
-    private static final BigDecimal AGE_LOADING = new BigDecimal("500.00");
-    private static final int VEHICLE_AGE_THRESHOLD = 10;
 
     /**
-     * Creates a new quote.
-     * @PreAuthorize: any authenticated user can create quotes.
-     * @CacheEvict: not needed here (new entity — nothing to evict).
-     * Kafka: publishes "motor.quote.created" after successful save.
+     * Creates a new motor quote.
+     *
+     * ANONYMOUS: policyholder_id = NULL. Quote is fully functional but unowned.
+     * AUTHENTICATED: policyholder_id = current user's AppUser.id. Auto-attached by server.
      */
     @Transactional
-    @PreAuthorize("isAuthenticated()")
     public QuoteResponse createQuote(CreateQuoteRequest request) {
-        log.info("Creating motor quote for vehicle: {}", request.getVehicleRegNumber());
+        log.info("Creating quote for vehicle: {} {}", request.getVehicleMake(), request.getVehicleModel());
 
-        AppUser policyholder = null;
-        if (request.getCustomerNumber() != null) {
-            policyholder = appUserRepository
-                    .findByCustomerNumber(request.getCustomerNumber().strip())
-                    .orElseThrow(() -> new ResourceNotFoundException(
-                            "Policyholder not found: " + request.getCustomerNumber()));
-        }
-
-        String normalizedReg = request.getVehicleRegNumber()
-                .toUpperCase().replace(" ", "").trim();
-
-        Vehicle vehicle = vehicleRepository.findByRegistrationNumber(normalizedReg).orElse(null);
-
-        BigDecimal premium = calculatePremium(request);
-        String quoteNumber = generateQuoteNumber();
+        AppUser policyholder = resolveCurrentPolicyholder();
 
         MotorQuote quote = MotorQuote.builder()
-                .quoteNumber(quoteNumber)
+                .quoteNumber(generateQuoteNumber())
                 .policyholder(policyholder)
-                .vehicle(vehicle)
-                .vehicleRegNumber(normalizedReg)
-                .vehicleMake(request.getVehicleMake().trim())
-                .vehicleModel(request.getVehicleModel().trim())
+                .vehicleRegNumber(request.getVehicleRegNumber().strip().toUpperCase())
+                .vehicleMake(request.getVehicleMake().strip())
+                .vehicleModel(request.getVehicleModel().strip())
                 .vehicleYear(request.getVehicleYear())
                 .sumInsured(request.getSumInsured())
-                .premium(premium)
-                .insuredName(request.getInsuredName().trim())
-                .phoneNumber(request.getPhoneNumber().trim())
+                .premium(calculatePremium(request.getSumInsured()))
+                .insuredName(request.getInsuredName().strip())
+                .phoneNumber(request.getPhoneNumber().strip())
                 .status(MotorQuote.QuoteStatus.DRAFT)
                 .build();
 
         MotorQuote saved = quoteRepository.save(quote);
-        log.info("Quote created: {} | Premium: KES {}", saved.getQuoteNumber(), saved.getPremium());
 
-        // Publish async Kafka event — non-blocking, won't affect HTTP response time
-        quoteEventProducer.publishQuoteCreated(KafkaEvents.QuoteCreatedEvent.builder()
-                .quoteNumber(saved.getQuoteNumber())
-                .vehicleRegNumber(saved.getVehicleRegNumber())
-                .insuredName(saved.getInsuredName())
-                .phoneNumber(saved.getPhoneNumber())
-                .premium(saved.getPremium())
-                .sumInsured(saved.getSumInsured())
-                .status(saved.getStatus().name())
-                .createdAt(saved.getCreatedAt())
-                .correlationId(UUID.randomUUID().toString())
-                .build());
+        log.info("Quote created: {} | policyholder={} | anonymous={}",
+                saved.getQuoteNumber(),
+                policyholder != null ? policyholder.getCustomerNumber() : "N/A",
+                policyholder == null);
 
         return mapToResponse(saved);
     }
 
     /**
-     * @Cacheable: cache result in Redis under key "quotes::<quoteNumber>".
-     * TTL = 15 minutes (configured in RedisConfig).
-     * On a cache hit, the DB is NOT queried — Redis returns the cached QuoteResponse.
-     *
-     * @PreAuthorize: any authenticated user can read quotes.
+     * Retrieves a quote by its human-readable number.
+     * Available to anonymous and authenticated users alike.
      */
     @Transactional(readOnly = true)
-    @Cacheable(value = "quotes", key = "#quoteNumber")
-    @PreAuthorize("isAuthenticated()")
     public QuoteResponse getQuoteByNumber(String quoteNumber) {
-        String clean = quoteNumber.strip();
-        log.info("Fetching quote (cache miss): [{}]", clean);
-
-        MotorQuote quote = quoteRepository.findByQuoteNumber(clean)
-                .orElseThrow(() -> new ResourceNotFoundException("Quote not found: " + clean));
-
+        MotorQuote quote = quoteRepository.findByQuoteNumber(quoteNumber.strip().toUpperCase())
+                .orElseThrow(() -> new ResourceNotFoundException("Quote not found: " + quoteNumber));
         return mapToResponse(quote);
     }
 
+    /**
+     * Search quotes by vehicle registration number.
+     * Available to anonymous and authenticated users alike.
+     */
     @Transactional(readOnly = true)
-    @PreAuthorize("isAuthenticated()")
     public List<QuoteResponse> searchByRegNumber(String regNumber) {
-        String normalized = regNumber.toUpperCase().replace(" ", "").strip();
-        log.info("Searching quotes for reg: [{}]", normalized);
-
-        return quoteRepository.findByVehicleRegNumberContainingIgnoreCase(normalized)
-                .stream()
-                .map(this::mapToResponse)
-                .collect(Collectors.toList());
+        List<MotorQuote> quotes = quoteRepository.findByVehicleRegNumber(regNumber.strip().toUpperCase());
+        return quotes.stream().map(this::mapToResponse).toList();
     }
 
     /**
-     * Activate quote: DRAFT → ACTIVE.
-     *
-     * @CacheEvict: clears the cached QuoteResponse for this quoteNumber so the
-     * next read fetches the updated ACTIVE status from DB, not the stale DRAFT.
-     *
-     * @PreAuthorize: only ADMIN or AGENT can activate quotes.
+     * Admin or underwriter: activate a DRAFT quote to ACTIVE.
+     * Requires authentication.
      */
     @Transactional
-    @CacheEvict(value = "quotes", key = "#quoteNumber")
-    @PreAuthorize("hasAnyRole('ADMIN', 'AGENT')")
     public QuoteResponse activateQuote(String quoteNumber) {
-        MotorQuote quote = quoteRepository.findByQuoteNumber(quoteNumber.strip())
+        MotorQuote quote = quoteRepository.findByQuoteNumber(quoteNumber.strip().toUpperCase())
                 .orElseThrow(() -> new ResourceNotFoundException("Quote not found: " + quoteNumber));
 
         if (quote.getStatus() != MotorQuote.QuoteStatus.DRAFT) {
             throw new IllegalStateException(
-                    "Only DRAFT quotes can be activated. Current status: " + quote.getStatus());
+                    "Quote " + quoteNumber + " cannot be activated (current status: " + quote.getStatus() + ")");
         }
 
         quote.setStatus(MotorQuote.QuoteStatus.ACTIVE);
+        quote.setUpdatedAt(LocalDateTime.now());
+
         MotorQuote saved = quoteRepository.save(quote);
-        log.info("Quote {} activated by user with ADMIN/AGENT role", saved.getQuoteNumber());
+        log.info("Quote {} activated to ACTIVE", quoteNumber);
 
         return mapToResponse(saved);
     }
 
     /**
-     * Hard-delete a quote record.
-     * @PreAuthorize: ADMIN only — cannot be called by ROLE_USER or ROLE_AGENT.
-     * @CacheEvict: always clears cache (even if the DB delete fails — safe to evict).
+     * Admin-only: list all quotes.
      */
-    @Transactional
-    @CacheEvict(value = "quotes", key = "#quoteNumber", beforeInvocation = false)
     @PreAuthorize("hasRole('ADMIN')")
-    public void deleteQuote(String quoteNumber) {
-        MotorQuote quote = quoteRepository.findByQuoteNumber(quoteNumber.strip())
-                .orElseThrow(() -> new ResourceNotFoundException("Quote not found: " + quoteNumber));
-        quoteRepository.delete(quote);
-        log.info("Quote {} deleted by ADMIN", quoteNumber);
+    @Transactional(readOnly = true)
+    public List<QuoteResponse> getAllQuotes() {
+        return quoteRepository.findAll().stream()
+                .map(this::mapToResponse)
+                .toList();
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
+    // ── Helpers ──────────────────────────────────────────────────────────────
 
-    private BigDecimal calculatePremium(CreateQuoteRequest request) {
-        BigDecimal basePremium = request.getSumInsured().multiply(BASE_RATE);
-        int vehicleAge = LocalDateTime.now().getYear() - request.getVehicleYear();
-        if (vehicleAge > VEHICLE_AGE_THRESHOLD) {
-            basePremium = basePremium.add(AGE_LOADING);
+    private AppUser resolveCurrentPolicyholder() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+
+        if (auth == null || !auth.isAuthenticated() || auth instanceof AnonymousAuthenticationToken) {
+            return null;
         }
-        return basePremium.setScale(2, RoundingMode.HALF_UP);
+
+        String username = auth.getName();
+        return appUserRepository.findByUsername(username).orElse(null);
     }
 
     private String generateQuoteNumber() {
-        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
-        String uid = UUID.randomUUID().toString().substring(0, 6).toUpperCase();
-        return "QTE-" + timestamp + "-" + uid;
+        String year = String.valueOf(LocalDateTime.now().getYear());
+        String seq = UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
+        return "QT-" + year + "-" + seq;
+    }
+
+    private BigDecimal calculatePremium(BigDecimal sumInsured) {
+        return sumInsured.multiply(new BigDecimal("0.035"))
+                .add(new BigDecimal("2500"))
+                .setScale(2, java.math.RoundingMode.HALF_UP);
     }
 
     private QuoteResponse mapToResponse(MotorQuote q) {
@@ -214,7 +166,7 @@ public class MotorQuoteService {
                 .phoneNumber(q.getPhoneNumber())
                 .status(q.getStatus().name())
                 .createdAt(q.getCreatedAt())
-                .expiresAt(q.getCreatedAt() != null ? q.getCreatedAt().plusDays(30) : null)
+                .expiresAt(q.getCreatedAt().plusDays(30))
                 .build();
     }
 }

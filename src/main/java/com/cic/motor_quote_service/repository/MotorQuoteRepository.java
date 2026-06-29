@@ -23,7 +23,7 @@ public interface MotorQuoteRepository extends JpaRepository<MotorQuote, Long> {
 
     // Spring generates with LIKE for search
     List<MotorQuote> findByVehicleRegNumberContainingIgnoreCase(String regNumber);
-
+    List<MotorQuote> findByVehicleRegNumber(String vehicleRegNumber);
     // Custom JPQL for complex queries
     @Query("SELECT q FROM MotorQuote q WHERE q.status = :status AND q.premium > :minPremium")
     List<MotorQuote> findByStatusAndMinPremium(
